@@ -430,7 +430,19 @@ allTracts.rings <-
   left_join(dplyr::select(allTracts, GEOID, MedRent, year), 
             by=c("GEOID"="GEOID", "year"="year")) %>%
   st_sf() %>%
-  mutate(distance = distance / 5280) #convert to miles
+  mutate(distance = distance / 5280) 
 
-ggplot()+
-  geom_line(data  = allTracts.rings , aes(x = distance , y = MedRent, fill = year))
+mean_RENT <- allTracts.rings %>%
+  group_by(year, distance) %>%
+  summarize(mean_RENT = mean(MedRent)) 
+
+ggplot(data = mean_RENT) +
+  geom_line(aes(x = distance, y = mean_RENT, col = year)) +
+  labs(title = " Rent as a function of distance to subway stations (Figure x.x.x)") +
+  plotTheme() + 
+  theme(legend.position="bottom")
+
+  
+
+
+
