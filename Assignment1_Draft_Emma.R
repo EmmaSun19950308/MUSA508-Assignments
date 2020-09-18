@@ -87,7 +87,7 @@ tracts09 <-
   get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
                                              "B15001_009E","B19013_001E","B25058_001E",
                                              "B06012_002E"), 
-          year=2009, state='Missouri', county= 'St Louis', geometry=T) %>% 
+          year=2009, state= 29, county= 510, geometry=T) %>% 
   st_transform('ESRI:102728')
 
 
