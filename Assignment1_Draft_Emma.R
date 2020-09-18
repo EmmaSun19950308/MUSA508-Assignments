@@ -442,7 +442,30 @@ ggplot(data = mean_RENT) +
   plotTheme() + 
   theme(legend.position="bottom")
 
-  
+
+
+# -------- Crime Data ----------
+# http://www.slmpd.org/Crimereports.shtml
+crime_dat <- read.csv('December2019.csv')
+
+# spatial reference list 
+# https://www.spatialreference.org/ref/?search=Missouri
+library(proj4)
+proj4string <- "+proj=tmerc +lat_0=35.83333333333334 +lon_0=-90.5 +k=0.999933333 +x_0=250000 +y_0=0 
++ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs "
+
+# Transformed data
+pj <- data.frame(project(cbind(crime_dat$XCoord,crime_dat$YCoord), proj4string,inv = TRUE))
+crime_dat$Latitude <- pj$X2
+crime_dat$Longitude <- pj$X1
+
+leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(~Longitude, ~Latitude, 
+                   data = crime_dat,
+                   radius = 2, 
+                   weight = 1,
+                   stroke = TRUE)
 
 
 
