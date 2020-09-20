@@ -2,29 +2,489 @@
 title: "Assignment1_TOD"
 author: "Emma Sun"
 date: "9/18/2020"
-output: html_document
+output:
+  html_document: default
+  word_document: default
 ---
 
-```{r setup, include=FALSE}
+# I. Introduction & Motivation
+
+
+# II. Setup: Set parameters and load libraries
+## Load Libraries
+```{r Setup}
 knitr::opts_chunk$set(echo = TRUE)
+options(scipen=999)
+
+
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(gridExtra)
+library(grid)
+library(knitr)
+library(kableExtra)
+library(rmarkdown)
 ```
 
-## R Markdown
+## Load Styling Options
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r Theme Function}
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.text.x = element_text(size = 14))
+}
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
 
-```{r cars}
-summary(cars)
+
 ```
 
-## Including Plots
+## Functions Preparation
+```{r Quantile Break, MultipleRingBuffer}
 
-You can also embed plots, for example:
+qBr <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],0),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]]), digits = 3),
+                 c(.01,.2,.4,.6,.8), na.rm=T)
+  }
+}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+q5 <- function(variable) {as.factor(ntile(variable, 5))}
+
+
+multipleRingBuffer <- function(inputPolygon, maxDistance, interval) 
+{
+  #create a list of distances that we'll iterate through to create each ring
+  distances <- seq(0, maxDistance, interval)
+  #we'll start with the second value in that list - the first is '0'
+  distancesCounter <- 2
+  #total number of rings we're going to create
+  numberOfRings <- floor(maxDistance / interval)
+  #a counter of number of rings
+  numberOfRingsCounter <- 1
+  #initialize an otuput data frame (that is not an sf)
+  allRings <- data.frame()
+  
+  #while number of rings  counteris less than the specified nubmer of rings
+  while (numberOfRingsCounter <= numberOfRings) 
+  {
+    #if we're interested in a negative buffer and this is the first buffer
+    #(ie. not distance = '0' in the distances list)
+    if(distances[distancesCounter] < 0 & distancesCounter == 2)
+    {
+      #buffer the input by the first distance
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #different that buffer from the input polygon to get the first ring
+      buffer1_ <- st_difference(inputPolygon, buffer1)
+      #cast this sf as a polygon geometry type
+      thisRing <- st_cast(buffer1_, "POLYGON")
+      #take the last column which is 'geometry'
+      thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+      #add a new field, 'distance' so we know how far the distance is for a give ring
+      thisRing$distance <- distances[distancesCounter]
+    }
+    
+    
+    #otherwise, if this is the second or more ring (and a negative buffer)
+    else if(distances[distancesCounter] < 0 & distancesCounter > 2) 
+    {
+      #buffer by a specific distance
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #create the next smallest buffer
+      buffer2 <- st_buffer(inputPolygon, distances[distancesCounter-1])
+      #This can then be used to difference out a buffer running from 660 to 1320
+      #This works because differencing 1320ft by 660ft = a buffer between 660 & 1320.
+      #bc the area after 660ft in buffer2 = NA.
+      thisRing <- st_difference(buffer2,buffer1)
+      #cast as apolygon
+      thisRing <- st_cast(thisRing, "POLYGON")
+      #get the last field
+      thisRing <- as.data.frame(thisRing$geometry)
+      #create the distance field
+      thisRing$distance <- distances[distancesCounter]
+    }
+    
+    #Otherwise, if its a positive buffer
+    else 
+    {
+      #Create a positive buffer
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #create a positive buffer that is one distance smaller. So if its the first buffer
+      #distance, buffer1_ will = 0. 
+      buffer1_ <- st_buffer(inputPolygon, distances[distancesCounter-1])
+      #difference the two buffers
+      thisRing <- st_difference(buffer1,buffer1_)
+      #cast as a polygon
+      thisRing <- st_cast(thisRing, "POLYGON")
+      #geometry column as a data frame
+      thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+      #add teh distance
+      thisRing$distance <- distances[distancesCounter]
+    }  
+    
+    #rbind this ring to the rest of the rings
+    allRings <- rbind(allRings, thisRing)
+    #iterate the distance counter
+    distancesCounter <- distancesCounter + 1
+    #iterate the number of rings counter
+    numberOfRingsCounter <- numberOfRingsCounter + 1
+  }
+  
+  #convert the allRings data frame to an sf data frame
+  allRings <- st_as_sf(allRings)
+}
+
+```
+## other setup
+```{r Other setup}
+palette5 <- c("#CCCCFF","#CC99FF","#9966CC","#663399","#330066")
+
+# Load census API key
+
+census_api_key("a7edab3d7c3df571998caab5a3cc12a4ec8d8b61" , overwrite  = TRUE)
+
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+# III. Data manipulation and visualization
+## 1. Data Wrangling
+### Census Data
+```{r Census Data, message=FALSE, warning=FALSE}
+# View(load_variables(2009,'acs5',cache = TRUE))
+
+tracts09 <-  
+  get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
+                                             "B15001_009E","B19013_001E","B25058_001E",
+                                             "B06012_002E"), 
+          year=2009, state= 48, county= 113, geometry=T) %>% 
+  st_transform('EPSG:32138')
+
+
+tracts09 <- 
+  tracts09 %>%
+  dplyr::select( -NAME, -moe) %>%
+  spread(variable, estimate) %>%
+  dplyr::select(-geometry) %>%
+  rename(TotalPop = B25026_001, 
+         Whites = B02001_002,
+         FemaleBachelors = B15001_050, 
+         MaleBachelors = B15001_009,
+         MedHHInc = B19013_001, 
+         MedRent = B25058_001,
+         TotalPoverty = B06012_002)
+
+
+
+tracts09 <- 
+  tracts09 %>%
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop, 0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop), 0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2009") %>%
+  dplyr::select(-Whites,-FemaleBachelors,-MaleBachelors,-TotalPoverty)
+
+# ---- 2017 Census Data -----
+
+tracts17 <- 
+  get_acs(geography = "tract", variables = c("B25026_001E","B02001_002E","B15001_050E",
+                                             "B15001_009E","B19013_001E","B25058_001E",
+                                             "B06012_002E"), 
+          year=2017, state= 48, county= 113, geometry=T, output="wide") %>%
+  st_transform('EPSG:32138') %>%
+  rename(TotalPop = B25026_001E, 
+         Whites = B02001_002E,
+         FemaleBachelors = B15001_050E, 
+         MaleBachelors = B15001_009E,
+         MedHHInc = B19013_001E, 
+         MedRent = B25058_001E,
+         TotalPoverty = B06012_002E) %>%
+  dplyr::select(-NAME, -starts_with("B")) %>% #-starts_with("B") awesome!
+  mutate(pctWhite = ifelse(TotalPop > 0, Whites / TotalPop,0),
+         pctBachelors = ifelse(TotalPop > 0, ((FemaleBachelors + MaleBachelors) / TotalPop),0),
+         pctPoverty = ifelse(TotalPop > 0, TotalPoverty / TotalPop, 0),
+         year = "2017") %>%
+  dplyr::select(-Whites, -FemaleBachelors, -MaleBachelors, -TotalPoverty) 
+
+# --- Combining 09 and 17 data ----
+
+allTracts <- rbind(tracts09,tracts17)
+```
+
+### Transit Data
+```{r Transit Data, echo=FALSE, message=FALSE, warning=FALSE}
+D_Stops <- 
+  st_read('https://opendata.arcgis.com/datasets/65b609c50cba44c19cfbaa2a0251a8ae_0.geojson') %>% 
+      mutate(Line = "Dallas Transit") %>%
+      select(STA_NAME) %>%
+  st_transform(st_crs(tracts09))  
+
+
+ggplot() + 
+  geom_sf(data=st_union(tracts09)) +
+  geom_sf(data=D_Stops, 
+          aes(colour = 'orange'), 
+          show.legend = "point", size= 2) +
+  scale_colour_manual(values = c("orange")) +
+  labs(title="Dallas Transit Stops", 
+       subtitle=" ", 
+       caption="Figure 1.1") +
+  mapTheme()
+```
+
+### Create Buffers
+```{r Create Buffers, echo=FALSE, message=FALSE, warning=FALSE}
+D_Buffers <- 
+  rbind(
+    st_buffer(D_Stops, 2640) %>%
+      mutate(Legend = "Buffer") %>%
+      dplyr::select(Legend),
+    st_union(st_buffer(D_Stops, 2640)) %>%
+      st_sf() %>%
+      mutate(Legend = "Unioned Buffer"))
+buffer <- filter(D_Buffers, Legend=="Unioned Buffer")
+
+selectCentroids <-
+  st_centroid(tracts09)[buffer,] %>%
+  st_drop_geometry() %>%
+  left_join(dplyr::select(tracts09, GEOID)) %>%
+  st_sf() %>%
+  dplyr::select(TotalPop) %>%
+  mutate(Selection_Type = "Select by Centroids")
+```
+
+
+## 2. TOD vs. Non-TOD: Four Variables
+```{r TOD vs. Non-TOD, echo=FALSE, message=FALSE, warning=FALSE}
+allTracts.group <- 
+  rbind(
+    st_centroid(allTracts)[buffer,] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "TOD"),
+    st_centroid(allTracts)[buffer, op = st_disjoint] %>%
+      st_drop_geometry() %>%
+      left_join(allTracts) %>%
+      st_sf() %>%
+      mutate(TOD = "Non-TOD")) %>%
+  mutate(MedRent.inf = ifelse(year == "2009", MedRent * 1.14, MedRent),
+         MedHHInc.inf = ifelse(year == "2009", MedHHInc * 1.14, MedHHInc)) # inflation rate
+
+
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = TOD)) +
+  labs(title = "Time/Space Groups") +
+  facet_wrap(~year)+
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+
+
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = q5(MedRent.inf))) +
+  geom_sf(data = buffer, fill = "transparent", color = "red" )+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "MedRent.inf"),
+                    name = "Rent\n(Quintile Breaks)") +
+  labs(title = "Median Rent 2009-2017", subtitle = "Real Dollars") +
+  facet_wrap(~year)+
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = q5(MedHHInc.inf))) +
+  geom_sf(data = buffer, fill = "transparent", color = "red")+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "MedHHInc"),
+                    name = "Rent\n(Quintile Breaks)") +
+  labs(title = "Median Household Income 2009-2017", subtitle = "Real Dollars") +
+  facet_wrap(~year)+
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+
+
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = q5(pctWhite))) +
+  geom_sf(data = buffer, fill = "transparent", color = "red")+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "pctWhite"),
+                    name = "Rent\n(Quintile Breaks)") +
+  labs(title = "Percentage of White Group 2009-2017", subtitle = "Real Dollars") +
+  facet_wrap(~year)+
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+
+
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = q5(pctBachelors))) +
+  geom_sf(data = buffer, fill = "transparent", color = "red")+
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "pctBachelors"),
+                    name = "Rent\n(Quintile Breaks)") +
+  labs(title = "Percentage of People with Bachelor Degree 2009-2017", subtitle = "Real Dollars") +
+  facet_wrap(~year)+
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+
+```
+
+
+## 3. Grouped Bar Plot
+```{r Grouped Bar Plot, echo=FALSE, message=FALSE, warning=FALSE}
+
+allTracts.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Variable, scales = "free", ncol=5) +
+  scale_fill_manual(values = c("#debae4", "#800694")) +
+  labs(title = "Indicator differences across time and space") +
+  plotTheme() + 
+  theme(legend.position="bottom")
+```
+
+
+
+
+## 4. Comparison Table
+```{r Comparison Table, echo=FALSE, message=FALSE, warning=FALSE}
+allTracts.Summary <- 
+  st_drop_geometry(allTracts.group) %>%
+  group_by(year, TOD) %>%
+  summarize(Rent = mean(MedRent, na.rm = T),
+            Population = mean(TotalPop, na.rm = T),
+            Percent_White = mean(pctWhite, na.rm = T),
+            Percent_Bach = mean(pctBachelors, na.rm = T),
+            Percent_Poverty = mean(pctPoverty, na.rm = T),
+            Median_Household_Income = mean(MedHHInc, na.rm = T))
+
+allTracts.Summary %>%
+  unite(year.TOD, year, TOD, sep = ": ", remove = T) %>%
+  gather(Variable, Value, -year.TOD) %>%
+  mutate(Value = round(Value, 2)) %>%
+  spread(year.TOD, Value) %>%
+  kable() %>%
+  kable_styling() %>%
+  footnote(general_title = "\n",
+           general = "Table 2.3")
+```
+
+
+
+
+## 5. Maps of Population and Rent within 0.5 mile of each transit station
+
+
+
+
+## 6. Rent as a function of distance to subway stations 
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+allTracts.rings <-
+  st_join(st_centroid(dplyr::select(allTracts, GEOID, year)), 
+          multipleRingBuffer(st_union(D_Stops), 47520, 2640)) %>%
+  st_drop_geometry() %>%
+  left_join(dplyr::select(allTracts, GEOID, MedRent, year), 
+            by=c("GEOID"="GEOID", "year"="year")) %>%
+  st_sf() %>%
+  mutate(distance = distance / 5280) 
+
+allTracts.rings <- na.omit(allTracts.rings)
+
+mean_RENT <- allTracts.rings %>%
+  group_by(year, distance) %>%
+  summarize(mean_RENT = mean(MedRent)) 
+
+ggplot(data = mean_RENT) +
+  geom_line(aes(x = distance, y = mean_RENT, col = year)) +
+  labs(title = " Rent as a function of distance to subway stations (Figure x.x.x)") +
+  plotTheme() + 
+  theme(legend.position="bottom")
+
+```
+
+
+
+## 7. Crime, Transit Access and Rents
+```{r Crime Data, echo=FALSE, message=FALSE, warning=FALSE}
+# Load Crime-Burglary Data
+crime_dat <- read.csv('Dallas_Crime_Data.CSV')
+
+crime_dat_point <- st_as_sf(crime_dat, coords = c("Longitude", "Latitude"), crs = 4326, agr = "constant") %>%
+  select(Type, geometry)
+
+# Burglary vs. Rents
+ggplot(allTracts.group) + 
+geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = q5(MedRent.inf))) +
+  geom_sf(data = crime_dat_point, 
+          aes(color = Type),
+          show.legend = 'point',size = 1) +
+  scale_fill_manual(values = palette5,
+                    labels = qBr(allTracts.group, "MedRent.inf"),
+                    name = "Rent\n(Quintile Breaks)")  +
+  labs(title = "Indicator differences across time and space") +
+  plotTheme() + theme(legend.position="bottom")
+
+
+# Burglary vs. Transit
+ggplot(allTracts.group)+
+  geom_sf(data = st_union(tracts09))+
+  geom_sf(aes(fill = TOD)) +
+  scale_fill_manual(values = palette5) +
+            
+  geom_sf(data = crime_dat_point, 
+          aes(color = Type),
+          show.legend = 'point',size = 1) +
+  labs(title = "Burglary vs. Transit") +
+  plotTheme() + 
+  theme(legend.position="bottom")
+  mapTheme() + 
+  theme(plot.title = element_text(size=22))
+```
+
+
+
+# IV. Conclusion
+
+
+
